@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder,StandardScaler
+from sklearn.preprocessing import LabelEncoder,StandardScaler,RobustScaler,MinMaxScaler
 from sklearn.model_selection import train_test_split,RepeatedStratifiedKFold
 from sklearn.metrics import plot_confusion_matrix, plot_roc_curve, plot_precision_recall_curve,make_scorer
 from sklearn.metrics import precision_score, recall_score
@@ -60,37 +60,48 @@ def outliers(df):
     return df
 
     
-@st.cache(persist=True)
-def Adasyn(df):
-    target = df["Diabetes"]
-    features = df.drop(columns=["Diabetes"])
-    ada = ADASYN(random_state=42,sampling_strategy="minority")
-    new_features, new_target = ada.fit_resample(features, target)
-    return new_features,new_target
-
-
 # @st.cache(persist=True)
-# def resampling(df,resample):
+# def Adasyn(df):
 #     target = df["Diabetes"]
 #     features = df.drop(columns=["Diabetes"])
-#     if resample=="Adasyn":
-#         re= ADASYN(random_state=42)
-#     if resample =="Smote":
-#         re=SMOTE(sampling_strategy='minority')
-#     if resample =="SMOTEENN":
-#         re=SMOTEENN(sampling_strategy='minority')
-#     if resample =="SMOTETomek":
-#         re=SMOTETomek(sampling_strategy='minority')    
-#     new_features, new_target = re.fit_resample(features, target)
+#     ada = ADASYN(random_state=42,sampling_strategy="minority")
+#     new_features, new_target = ada.fit_resample(features, target)
 #     return new_features,new_target
+
+
+@st.cache(persist=True)
+def resampling(df,resample):
+    target = df["Diabetes"]
+    features = df.drop(columns=["Diabetes"])
+    if resample=="Adasyn":
+        re= ADASYN(random_state=42)
+    if resample =="Smote":
+        re=SMOTE(sampling_strategy='minority')
+    if resample =="SMOTEENN":
+        re=SMOTEENN(sampling_strategy='minority')
+    if resample =="SMOTETomek":
+        re=SMOTETomek(sampling_strategy='minority')    
+    new_features, new_target = re.fit_resample(features, target)
+    return new_features,new_target
+
+@st.cache(persist=True)
+def scaling(X,scale):
+    if scale=="MinMax":
+        sc= MinMaxScaler()
+    if scale =="Standard":
+        sc=StandardScaler()
+    if scale =="Robust":
+        sc=RobustScaler()    
+    X_res= pd.DataFrame(sc.fit_transform(X),columns=list(X.columns))
+    return X_res
 
  
 
-@st.cache(persist=True)
-def scalar(X):
-    scaler = StandardScaler()
-    X_res=pd.DataFrame(scaler.fit_transform(X),columns=list(X.columns))
-    return X_res
+# @st.cache(persist=True)
+# def scalar(X):
+#     scaler = StandardScaler()
+#     X_res=pd.DataFrame(scaler.fit_transform(X),columns=list(X.columns))
+#     return X_res
 
 
 @st.cache(persist=True)
@@ -115,13 +126,19 @@ if st.sidebar.checkbox("profiling",False):
     st_profile_report(profile) 
 
 df=outliers(df)
-X, Y= Adasyn(df) 
+# X, Y= Adasyn(df) 
 st.sidebar.subheader("Data preprocessing")
-size = st.sidebar.number_input("Split Size", 0.11, 1.00, step=0.11, key="size")
-# resample = st.sidebar.selectbox("resample", ("Adasyn","Smote","SMOTEENN","SMOTETomek"))
-# X, Y= resampling(df,resample) 
-X1=scalar(X)
-x_train, x_test, y_train, y_test = split(X1,Y,size)
+if st.sidebar.checkbox("Data preprocessing", False):
+    size = st.sidebar.number_input("Split Size", 0.1, 0.99, step=0.05, key="size")
+    resample = st.sidebar.selectbox("resampling", ("Adasyn","Smote","SMOTEENN","SMOTETomek"))
+    scale = st.sidebar.selectbox("scaling", ("MinMax","Standard","Robust"))
+    X, Y= resampling(df,resample) 
+    X1=scaling(X,scale)
+    x_train, x_test, y_train, y_test = split(X1,Y,size)
+    validation=st.sidebar.selectbox("validation", ("kfold","stratified"))
+if st.sidebar.checkbox("Classifier", False):
+    classifier = st.sidebar.selectbox("Classifier", ("Support Vector Machine (SVM)", "Logistic Regression", "Random Forest","Decision Tree",
+                                                "KNN","Naive Bayes","Voting classifier","Dynamic","AdaBoostClassifier","ExtraTreesClassifier","GradientBoostingClassifier","Dynamic Weighted","Stacking"))
 
 
 
@@ -145,15 +162,24 @@ def evaluate_model_accuracy(model, X, y):
     scores = cross_val_score(model, X, y, scoring='accuracy', cv=kfold, n_jobs=-1)
     return scores
     
-def evaluate_model_precision(model,X,y):
+def evaluate_model_precision(model,X,y,validation):
     scoring = {'precision' : make_scorer(precision_score,pos_label="Diabetes") }
-    kfold = RepeatedStratifiedKFold(n_splits=10, random_state=42)
-    results =cross_validate(estimator=model,
+    if validation=="kfold":
+        kfold = KFold(n_splits=10, shuffle=True)
+        results =cross_validate(estimator=model,
                                     X=X,
                                     y=y,
                                     cv=kfold,
                                     scoring=scoring)
-    return results["test_precision"]
+        return results["test_precision"]
+    if validation=="stratified":
+        kfold = RepeatedStratifiedKFold(n_splits=10, random_state=42)
+        results =cross_validate(estimator=model,
+                                    X=X,
+                                    y=y,
+                                    cv=kfold,
+                                    scoring=scoring)
+        return results["test_precision"]
 
 def evaluate_model_recall_positive(model,X,y):
     scoring = {'recall' : make_scorer(recall_score,pos_label="Diabetes") }
@@ -188,39 +214,48 @@ def evaluate_model_f1score(model,X,y):
 
 class_names = ['Diabetes', 'No Diabetes']
 st.sidebar.subheader("Choose classifier")
-classifier = st.sidebar.selectbox("Classifier", ("Support Vector Machine (SVM)", "Logistic Regression", "Random Forest","Decision Tree",
-                                                "KNN","Naive Bayes","Voting classifier","Dynamic","AdaBoostClassifier","ExtraTreesClassifier","GradientBoostingClassifier","Dynamic Weighted","Stacking"))
-
-if classifier == "Support Vector Machine (SVM)":
-    metrics = st.sidebar.multiselect("What metrics to plot?", ("Confusion Matrix", "ROC Curve", "Precision-Recall Curve"))
-    if st.sidebar.button("Classify", key="classify"):
-        st.subheader("Support Vector Machine (SVM) results")
-        model = SVC(probability=True)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)
-
+# classifier = st.sidebar.selectbox("Classifier", ("Support Vector Machine (SVM)", "Logistic Regression", "Random Forest","Decision Tree",
+#                                                 "KNN","Naive Bayes","Voting classifier","Dynamic","AdaBoostClassifier","ExtraTreesClassifier","GradientBoostingClassifier","Dynamic Weighted","Stacking"))
+# validation=st.sidebar.selectbox("validation", ("kfold","stratified"))
+try:
+    if classifier == "Support Vector Machine (SVM)":
+        metrics = st.sidebar.multiselect("What metrics to plot?", ("Confusion Matrix", "ROC Curve", "Precision-Recall Curve"))
+        if st.sidebar.button("Classify", key="classify"):
+            st.subheader("Support Vector Machine (SVM) results")
+            model = SVC(probability=True)
+            try:
+                model.fit(x_train, y_train)
+                accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+                y_pred = model.predict(x_test)
+                st.write("Accuracy: ", accuracy)
+                st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+                st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+                st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+                st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+                plot_metrics(metrics)
+            except NameError:
+                st.write("Please preprocess the data")
+except NameError:
+    st.write("please select the classifier")
+    
 if classifier == "Logistic Regression":
     metrics = st.sidebar.multiselect("What metrics to plot?", ("Confusion Matrix", "ROC Curve", "Precision-Recall Curve"))
     
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("Logistic Regression Results")
         model = LogisticRegression()
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")
         
         
 
@@ -230,15 +265,18 @@ if classifier == "Random Forest":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("Random Forest Results")
         model = RandomForestClassifier(random_state=42)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)        
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")        
         
 
 if classifier == "Decision Tree":
@@ -247,15 +285,18 @@ if classifier == "Decision Tree":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("Decision Tree Results")
         model = DecisionTreeClassifier(random_state=42)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)         
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")         
      
 
     
@@ -266,15 +307,18 @@ if classifier == "KNN":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("KNN Results")
         model = KNeighborsClassifier(n_neighbors=n_neighbors,metric=distance)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")
         
         
 if classifier == "Naive Bayes":
@@ -282,16 +326,19 @@ if classifier == "Naive Bayes":
     
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("Naive bayes Results")
-        model = GaussianNB()
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)   
+        model=GaussianNB()
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")   
         
         
 if classifier == "Voting classifier":
@@ -300,15 +347,18 @@ if classifier == "Voting classifier":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("Voting Results")
         model = VotingClassifier(estimators=[ ('dt', DecisionTreeClassifier()),('knn',KNeighborsClassifier()),('svm',SVC(probability=True)),('nb',GaussianNB()),('LR',LogisticRegression())], voting='soft')
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)        
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")        
        
     
 
@@ -347,15 +397,18 @@ if classifier == "Dynamic":
         st.subheader("Dynamic results")
         dy=dynamic_ensembles(Dynamic_options)
         model = VotingClassifier(estimators=dy,voting='soft')
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")
         
         
         
@@ -393,14 +446,18 @@ if classifier == "Dynamic Weighted":
         scores = weights(dynamic_ensembles(Dynamic_options)[0])
         dy,e=dynamic_ensembles(Dynamic_options)
         model = VotingClassifier(estimators=dy,voting='soft',weights=scores)
-        model.fit(x_train, y_train)
-        accuracy = model.score(x_test, y_test)
-        y_pred = model.predict(x_test)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)   
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")   
         
         
         
@@ -466,17 +523,20 @@ if classifier == "Stacking":
         st.subheader("Dynamic results")
         dy,a=dynamic_ensembles(Dynamic_options,level1)
         try:
-            model = StackingClassifier(estimators=dy,final_estimator=a)
-            model.fit(x_train, y_train)
-            accuracy = model.score(x_test, y_test)
-            y_pred = model.predict(x_test)
-            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-            plot_metrics(metrics) 
-        except ValueError:
-            st.error("Please select alteast one Level-0 classifier")
+            try:
+                model = StackingClassifier(estimators=dy,final_estimator=a)
+                model.fit(x_train, y_train)
+                accuracy = model.score(x_test, y_test)
+                y_pred = model.predict(x_test)
+                st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
+                st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+                st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+                st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+                plot_metrics(metrics) 
+            except ValueError:
+                st.error("Please select alteast one Level-0 classifier")
+        except NameError:
+            st.write("Please preprocess the data")
 #         model.fit(x_train, y_train)
 #         accuracy = model.score(x_test, y_test)
 #         y_pred = model.predict(x_test)
@@ -496,15 +556,18 @@ if classifier == "AdaBoostClassifier":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("AdaBoostClassifier Results")
         model =AdaBoostClassifier(random_state=42,n_estimators=250,learning_rate=1)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)   
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")   
         
         
         
@@ -515,15 +578,18 @@ if classifier == "GradientBoostingClassifier":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("GradientBoostingClassifier Results")
         model =GradientBoostingClassifier(n_estimators=250,random_state=42,learning_rate=0.9)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)  
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")  
         
         
         
@@ -533,15 +599,18 @@ if classifier == "ExtraTreesClassifier":
     if st.sidebar.button("Classify", key="classify"):
         st.subheader("ExtraTreesClassifier Results")
         model =ExtraTreesClassifier(n_estimators=250,max_features=5,random_state=42)
-        model.fit(x_train, y_train)
-        accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
-        y_pred = model.predict(x_test)
-        st.write("Accuracy: ", accuracy)
-        st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train)))
-        st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
-        st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
-        st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
-        plot_metrics(metrics)
+        try:
+            model.fit(x_train, y_train)
+            accuracy = np.mean(evaluate_model_accuracy(model,x_train,y_train))
+            y_pred = model.predict(x_test)
+            st.write("Accuracy: ", accuracy)
+            st.write("Precision: ", np.mean(evaluate_model_precision(model,x_train,y_train,validation)))
+            st.write("Recall: ", np.mean(evaluate_model_recall_positive(model,x_train,y_train)))
+            st.write("roc_auc: ", np.mean(evaluate_model_roc_auc(model,x_train,y_train)))
+            st.write("F1_score: ", np.mean(evaluate_model_f1score(model,x_train,y_train)))
+            plot_metrics(metrics)
+        except NameError:
+            st.write("Please preprocess the data")
                 
             
             
